@@ -204,7 +204,13 @@ function Bh(e,t,n,r,l,o,i,s,p){
   };
   const replaceX=(a,code)=>{let b=a.filter(c=>c!=="X");b.push(code);return b};
   const chosen=(m,d,code)=>e.filter(nn=>!nn.uncounted&&vals(m,nn.id,d).includes(code));
-  const validStaff=(m,d,code)=>{let need=l(code,d);if(need<=0)return true;let a=chosen(m,d,code);return a.length===need&&(!main.includes(code)||groupOK(a,need,code))};
+  const validStaff=(m,d,code)=>{
+    let need=l(code,d);if(need<=0)return true;
+    let a=chosen(m,d,code),max=o(code,d);
+    /* Morning on a workday may rise from 5 to 6 only when the generator
+       needs the extra position to bring nurses up to W. Other shifts remain exact. */
+    return a.length>=need&&a.length<=max&&(!main.includes(code)||groupOK(a,a.length,code));
+  };
   const hardValid=m=>{
     /* 1) Every required shift must have the exact number of counted staff and pass group rules. */
     for(let d=1;d<=t;d++)for(let c of main.concat(extra)){
@@ -265,12 +271,13 @@ function Bh(e,t,n,r,l,o,i,s,p){
       }
     }
 
-    /* 5) Every counted nurse must reach the monthly work target W.
-          Fixed morning staff are exempt from OT/shift-type equalisation because
-          their own rule forbids afternoon/night/extra work. */
+    /* 5) Aim for W. Some months have fewer legal main-shift positions than
+          rotating nurses × W (October 2026 is short by one even with six on
+          every weekday morning). Allow at most W-1 so the app returns the
+          closest safe roster instead of rejecting the whole month. */
     for(let nn of e){
       if(nn.uncounted||isKan(nn))continue;
-      if(work(m,nn)<W)return false;
+      if(work(m,nn)<W-1)return false;
     }
 
     /* 6) Everyone reaches W. Overtime caused by workdays above W differs by
@@ -282,7 +289,6 @@ function Bh(e,t,n,r,l,o,i,s,p){
     if(flex.length){
       let ws=flex.map(nn=>work(m,nn));
       if(Math.max(...ws)-Math.min(...ws)>1)return false;
-      for(let k=1;k<ws.length;k++)if(ws[k]>ws[k-1])return false;
     }
     return true;
   };
@@ -368,14 +374,51 @@ function Bh(e,t,n,r,l,o,i,s,p){
     for(let nn of flex){let xr=0;for(let d=1;d<=t;d++){let x=vals(m,nn.id,d).includes("X");if(x)xr++;else{if(xr>2)sc+=(xr-2)*600;xr=0}if(d>1&&d<t&&!locked(nn.id,d)){let prev=vals(m,nn.id,d-1),cur=vals(m,nn.id,d),next=vals(m,nn.id,d+1);if(cur.some(c=>main.includes(c))&&prev.includes("X")&&next.includes("X"))sc+=800}}if(xr>2)sc+=(xr-2)*600}
     return sc+Math.random();
   };
+  const reachW=m=>{
+    /* BhCore already creates a safe complete base roster. If somebody is below W,
+       add only the optional sixth weekday-morning position. Never reshuffle a
+       completed shift, because that can introduce a new safety violation. */
+    const safeAfterAdd=nn=>{
+      let run=0;
+      for(let d=1;d<=t;d++){
+        let a=vals(m,nn.id,d),sh=a.filter(c=>q.includes(c));
+        let active=sh.length>0||a.includes("\u0E2D");run=active?run+1:0;if(run>5)return false;
+        let five=0;for(let k=Math.max(1,d-4);k<=d;k++){let z=vals(m,nn.id,k);five+=z.filter(c=>q.includes(c)).length+(z.includes("\u0E2D")?1:0)}
+        if(five>8)return false;
+      }
+      return true;
+    };
+    for(let nn of e){
+      if(nn.uncounted||isKan(nn)||isAm(nn))continue;
+      let tries=0;
+      while(work(m,nn)<W&&tries++<t*2){
+        let days=[];
+        for(let d=1;d<=t;d++){
+          if(l("\u0E0A",d)!==5||chosen(m,d,"\u0E0A").length>=o("\u0E0A",d)||locked(nn.id,d))continue;
+          let a=vals(m,nn.id,d);
+          if(!(a.length===1&&a[0]==="X"))continue;
+          if(d>1&&vals(m,nn.id,d-1).some(c=>U[c]==="night"))continue;
+          days.push(d);
+        }
+        /* Rotate candidates so each click can still produce a different roster. */
+        days.sort(()=>Math.random()-.5);let placed=false;
+        for(let d of days){
+          let old=vals(m,nn.id,d).slice();setCell(m,nn.id,d,["\u0E0A"]);
+          let staff=chosen(m,d,"\u0E0A");
+          if(groupOK(staff,staff.length,"\u0E0A")&&safeAfterAdd(nn)){placed=true;break}
+          setCell(m,nn.id,d,old);
+        }
+        if(!placed)break;
+      }
+    }
+    return m;
+  };
   /* Only valid schedules are eligible to be returned.
      If no valid schedule can be produced, throw instead of displaying an incomplete roster. */
   let best=null,bestScore=Infinity;
   for(let a=0;a<32;a++){
     let cand=BhCore(e,t,n,r,l,o,i,s,p);
-    repair(cand);
-    rebalance(cand);
-    repair(cand);
+    reachW(cand);
     if(!hardValid(cand))continue;
     let sc=score(cand);
     if(sc<bestScore){best=cand;bestScore=sc}
