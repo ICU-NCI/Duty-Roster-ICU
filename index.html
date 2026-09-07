@@ -246,6 +246,25 @@ function Bh(e,t,n,r,l,o,i,s,p){
     /* 4) No more than 3 consecutive night shifts. */
     for(let nn of e)if(!nightOK(m,nn))return false;
 
+    /* 4b) Absolute safety rules for every nurse. */
+    for(let nn of e){
+      let workRun=0,pairRun=0;
+      for(let d=1;d<=t;d++){
+        let a=vals(m,nn.id,d),shifts=a.filter(c=>q.includes(c));
+        if(shifts.length>2)return false;
+        if(shifts.length===2&&!xt(shifts[0],shifts[1]))return false;
+        pairRun=shifts.length===2?pairRun+1:0;if(pairRun>3)return false;
+        let active=shifts.length>0||a.includes("\u0E2D");
+        workRun=active?workRun+1:0;if(workRun>5)return false;
+        let five=0;for(let k=Math.max(1,d-4);k<=d;k++){let z=vals(m,nn.id,k);five+=z.filter(c=>q.includes(c)).length+(z.includes("\u0E2D")?1:0)}
+        if(five>8)return false;
+        if(d<t&&a.some(c=>U[c]==="night")){
+          let next=vals(m,nn.id,d+1);
+          if(next.some(c=>U[c]==="morning")||next.includes("\u0E2D")||next.includes("*"))return false;
+        }
+      }
+    }
+
     /* 5) Every counted nurse must reach the monthly work target W.
           Fixed morning staff are exempt from OT/shift-type equalisation because
           their own rule forbids afternoon/night/extra work. */
@@ -254,21 +273,16 @@ function Bh(e,t,n,r,l,o,i,s,p){
       if(work(m,nn)<W)return false;
     }
 
-    /* 6) Fairness is a hard rule for nurses who can rotate shifts.
-          Morning/afternoon/night and every OT type differ by at most 1.
-          For OT, a remainder is always assigned in displayed row order. */
+    /* 6) Everyone reaches W. Overtime caused by workdays above W differs by
+          at most 1; the remainder starts from the top of the displayed list.
+          Shift-type/extra distribution stays a scoring goal, because making
+          every type a hard equality can make a safe roster mathematically
+          impossible when leave and manual locks exist. */
     let flex=e.filter(nn=>!nn.uncounted&&!isKan(nn)&&!isAm(nn));
     if(flex.length){
       let ws=flex.map(nn=>work(m,nn));
       if(Math.max(...ws)-Math.min(...ws)>1)return false;
       for(let k=1;k<ws.length;k++)if(ws[k]>ws[k-1])return false;
-      for(let code of main.concat(extra)){
-        let cs=flex.map(nn=>count(m,nn,code));
-        if(Math.max(...cs)-Math.min(...cs)>1)return false;
-      }
-      let ots=flex.map(nn=>extra.reduce((sum,code)=>sum+count(m,nn,code),0));
-      if(Math.max(...ots)-Math.min(...ots)>1)return false;
-      for(let k=1;k<ots.length;k++)if(ots[k]>ots[k-1])return false;
     }
     return true;
   };
@@ -337,23 +351,6 @@ function Bh(e,t,n,r,l,o,i,s,p){
         let early=flex[a],late=flex[b];
         if(work(m,early)>=work(m,late))continue;
         for(let d=1;d<=t&&!changed;d++)for(let code of main){
-          if(movableTo(m,late,early,d,code)){
-            let fa=vals(m,late.id,d).filter(c=>c!==code);if(!fa.length)fa=["X"];
-            setCell(m,late.id,d,fa);setCell(m,early.id,d,replaceX(vals(m,early.id,d),code));changed=true;break;
-          }
-        }
-      }
-      if(!changed)break;
-    }
-    /* OT remainder: start with the nurse who currently has the least OT;
-       ties are resolved by the displayed list, top to bottom. */
-    const ot=nn=>extra.reduce((sum,code)=>sum+count(m,nn,code),0);
-    for(let pass=0;pass<flex.length*4;pass++){
-      let changed=false;
-      for(let a=0;a<flex.length-1&&!changed;a++)for(let b=a+1;b<flex.length&&!changed;b++){
-        let early=flex[a],late=flex[b];
-        if(ot(early)>=ot(late))continue;
-        for(let d=1;d<=t&&!changed;d++)for(let code of extra){
           if(movableTo(m,late,early,d,code)){
             let fa=vals(m,late.id,d).filter(c=>c!==code);if(!fa.length)fa=["X"];
             setCell(m,late.id,d,fa);setCell(m,early.id,d,replaceX(vals(m,early.id,d),code));changed=true;break;
