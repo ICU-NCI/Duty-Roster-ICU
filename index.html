@@ -194,6 +194,7 @@ function Bh(e,t,n,r,l,o,i,s,p){
     let a=vals(m,nn.id,d);
     if(a.some(c=>["\u0E1B","\u0E01","V","\u0E2D","\u0E04","\u0E23","*"].includes(c)))return false;
     if(a.includes(code))return false;
+    if(a.some(c=>q.includes(c)&&U[c]===U[code]))return false;
     if(main.includes(code)&&a.some(c=>main.includes(c)))return false;
     if(extra.includes(code)&&a.some(c=>extra.includes(c)))return false;
     if(grp(nn)===4&&extra.includes(code)){
@@ -210,6 +211,23 @@ function Bh(e,t,n,r,l,o,i,s,p){
     /* Morning on a workday may rise from 5 to 6 only when the generator
        needs the extra position to bring nurses up to W. Other shifts remain exact. */
     return a.length>=need&&a.length<=max&&(!main.includes(code)||groupOK(a,a.length,code));
+  };
+  const nurseSafe=(m,nn)=>{
+    let workRun=0,pairRun=0,nightRun=0;
+    for(let d=1;d<=t;d++){
+      let a=vals(m,nn.id,d),shifts=a.filter(c=>q.includes(c));
+      if(shifts.length>2||shifts.length===2&&!xt(shifts[0],shifts[1]))return false;
+      pairRun=shifts.length===2?pairRun+1:0;if(pairRun>3)return false;
+      nightRun=shifts.some(c=>U[c]==="night")?nightRun+1:0;if(nightRun>3)return false;
+      let active=shifts.length>0||a.includes("\u0E2D");workRun=active?workRun+1:0;if(workRun>5)return false;
+      let five=0;for(let k=Math.max(1,d-4);k<=d;k++){let z=vals(m,nn.id,k);five+=z.filter(c=>q.includes(c)).length+(z.includes("\u0E2D")?1:0)}
+      if(five>8)return false;
+      if(d<t&&shifts.some(c=>U[c]==="night")){
+        let next=vals(m,nn.id,d+1);
+        if(next.some(c=>U[c]==="morning")||next.includes("\u0E2D")||next.includes("*"))return false;
+      }
+    }
+    return true;
   };
   const hardValid=m=>{
     /* 1) Every required shift must have the exact number of counted staff and pass group rules. */
@@ -271,25 +289,9 @@ function Bh(e,t,n,r,l,o,i,s,p){
       }
     }
 
-    /* 5) Aim for W. Some months have fewer legal main-shift positions than
-          rotating nurses × W (October 2026 is short by one even with six on
-          every weekday morning). Allow at most W-1 so the app returns the
-          closest safe roster instead of rejecting the whole month. */
-    for(let nn of e){
-      if(nn.uncounted||isKan(nn))continue;
-      if(work(m,nn)<W-1)return false;
-    }
-
-    /* 6) Everyone reaches W. Overtime caused by workdays above W differs by
-          at most 1; the remainder starts from the top of the displayed list.
-          Shift-type/extra distribution stays a scoring goal, because making
-          every type a hard equality can make a safe roster mathematically
-          impossible when leave and manual locks exist. */
-    let flex=e.filter(nn=>!nn.uncounted&&!isKan(nn)&&!isAm(nn));
-    if(flex.length){
-      let ws=flex.map(nn=>work(m,nn));
-      if(Math.max(...ws)-Math.min(...ws)>1)return false;
-    }
+    /* Work totals, OT and shift-type equality are optimisation goals only.
+       Manual leave/X and safety rules can make exact equality impossible;
+       that must never cause an otherwise safe complete roster to be rejected. */
     return true;
   };
   const repair=m=>{
@@ -302,10 +304,31 @@ function Bh(e,t,n,r,l,o,i,s,p){
           let pool=e.filter(nn=>eligibleCell(m,nn,d,code));
           pool=pool.filter(nn=>{
             let old=vals(m,nn.id,d).slice(),neu=replaceX(old,code);setCell(m,nn.id,d,neu);
-            let ok=!main.includes(code)||groupOK(chosen(m,d,code),need,code);if(code==="\u0E14")ok=ok&&nightOK(m,nn);
+            let ok=(!main.includes(code)||groupOK(chosen(m,d,code),need,code))&&nurseSafe(m,nn);
             setCell(m,nn.id,d,old);return ok;
           });
-          if(!pool.length)break;
+          if(!pool.length){
+            /* No direct candidate: make a safe two-person exchange on the same
+               day, then refill the displaced main shift. This resolves tight
+               days with many manual X/leave locks without touching locked cells. */
+            let swapped=false;
+            if(main.includes(code))for(let from of e){
+              if(swapped||from.uncounted||isKan(from)||isAm(from)||locked(from.id,d))continue;
+              let fa=vals(m,from.id,d),oldCode=fa.find(c=>main.includes(c)&&c!==code);
+              if(!oldCode)continue;
+              let fOld=fa.slice(),fNew=fa.map(c=>c===oldCode?code:c);setCell(m,from.id,d,fNew);
+              if(!nurseSafe(m,from)){setCell(m,from.id,d,fOld);continue}
+              for(let to of e){
+                if(to.id===from.id||!eligibleCell(m,to,d,oldCode))continue;
+                let tOld=vals(m,to.id,d).slice();setCell(m,to.id,d,replaceX(tOld,oldCode));
+                if(nurseSafe(m,to)&&validStaff(m,d,code)&&validStaff(m,d,oldCode)){swapped=true;changed=true;break}
+                setCell(m,to.id,d,tOld);
+              }
+              if(!swapped)setCell(m,from.id,d,fOld);
+            }
+            if(swapped)continue;
+            break;
+          }
           pool.sort((a,b)=>{
             let aw=work(m,a),bw=work(m,b),ac=count(m,a,code),bc=count(m,b,code);
             let ao=extra.reduce((sum,c)=>sum+count(m,a,c),0),bo=extra.reduce((sum,c)=>sum+count(m,b,c),0);
@@ -370,7 +393,17 @@ function Bh(e,t,n,r,l,o,i,s,p){
   const score=m=>{
     let flex=e.filter(nn=>!nn.uncounted&&!isKan(nn)&&!isAm(nn)),sc=0;
     let ws=flex.map(nn=>work(m,nn));if(ws.length){let mn=Math.min(...ws),mx=Math.max(...ws);for(let w of ws)if(w<W)sc+=(W-w)*1e7;sc+=(mx-mn)*2e6;}
-    for(let c of main.concat(extra)){let a=flex.map(nn=>count(m,nn,c));if(a.length)sc+=(Math.max(...a)-Math.min(...a))*(main.includes(c)?4000:2500)}
+    /* Prefer equal/near-equal totals, with any unavoidable larger totals
+       appearing earlier in the displayed list (high to low). */
+    for(let k=1;k<ws.length;k++)if(ws[k]>ws[k-1])sc+=(ws[k]-ws[k-1])*250000;
+    for(let c of main.concat(extra)){
+      let a=flex.map(nn=>count(m,nn,c));
+      if(a.length)sc+=(Math.max(...a)-Math.min(...a))*(main.includes(c)?4000:2500);
+      for(let k=1;k<a.length;k++)if(a[k]>a[k-1])sc+=(a[k]-a[k-1])*(main.includes(c)?1200:1800);
+    }
+    let ots=flex.map(nn=>extra.reduce((sum,c)=>sum+count(m,nn,c),0));
+    if(ots.length)sc+=(Math.max(...ots)-Math.min(...ots))*5000;
+    for(let k=1;k<ots.length;k++)if(ots[k]>ots[k-1])sc+=(ots[k]-ots[k-1])*2500;
     for(let nn of flex){let xr=0;for(let d=1;d<=t;d++){let x=vals(m,nn.id,d).includes("X");if(x)xr++;else{if(xr>2)sc+=(xr-2)*600;xr=0}if(d>1&&d<t&&!locked(nn.id,d)){let prev=vals(m,nn.id,d-1),cur=vals(m,nn.id,d),next=vals(m,nn.id,d+1);if(cur.some(c=>main.includes(c))&&prev.includes("X")&&next.includes("X"))sc+=800}}if(xr>2)sc+=(xr-2)*600}
     return sc+Math.random();
   };
@@ -418,6 +451,7 @@ function Bh(e,t,n,r,l,o,i,s,p){
   let best=null,bestScore=Infinity;
   for(let a=0;a<32;a++){
     let cand=BhCore(e,t,n,r,l,o,i,s,p);
+    repair(cand);
     reachW(cand);
     if(!hardValid(cand))continue;
     let sc=score(cand);
